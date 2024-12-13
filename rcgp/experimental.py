@@ -7,7 +7,7 @@ from .utils import eye
 from .weight_functions import IMQ, partial_y_IMQ
 from .kernels import Matern32Kernel
 from .latent_process import MaternProcess
-from .weight_functions import IMQ, partial_IMQ
+from .weight_functions import IMQ, partial_y_IMQ
 
 
 class SpatioTemporalRCGP(nn.Module):
@@ -385,48 +385,6 @@ class SpatioTemporalRCGP(nn.Module):
             return m_updated, P_updated, energy, weights
         else:
             return m_updated, P_updated, weights
-
-    """
-    def update_step(self, m_pred : tc.Tensor, P_pred : tc.Tensor, Y : tc.Tensor, optim : bool):
-
-        H_m_pred = self.H @ m_pred #Prediction of mean
-        H_P_pred = self.H @ P_pred #Partial prediction of covariance
-
-        weights, partial_weights = self.compute_weights(Y=Y, m_prior=H_m_pred, P_prior=H_P_pred @ self.H.T) #Weights Computation
-        v_k = self.v(Y=Y, weights=weights, partial_weights=partial_weights)
-        R_k = self.R(Y=Y, weights=weights, partial_weights=partial_weights)
-
-        #Residuals
-        y_hat_r = v_k - H_m_pred #RTGP residuals for update
-
-        if optim : 
-            y_hat_e = Y - H_m_pred  #Regular Residuals for evidence computation
-
-        #Innovation covariance
-        S_r = H_P_pred @ self.H.T + R_k #Innovation for update
-
-        if optim:
-            S_e = H_P_pred @ self.H.T + self.var_y * tc.eye(Y.shape[1]) #Innovation for evidence computation
-
-        # Kalman Gain
-        K = P_pred @ self.H.T @ tc.linalg.inv(S_r)
-
-        # Update state estimate
-        m_updated = m_pred + K @ y_hat_r
-
-        # Update covariance estimate
-        P_updated = P_pred - K @ H_P_pred
-
-        # Compute energy function
-        if optim:
-            energy = (0.5 * tc.logdet(2 * tc.pi * S_e) + 0.5 * y_hat_e.T @ tc.linalg.inv(S_e) @ y_hat_e).squeeze()
-
-        if not optim:
-            return m_updated, P_updated, weights
-        if optim:
-            return m_updated, P_updated, energy, weights
-
-    """
     
     def filtsmooth(self, temporal_kernel : MaternProcess, spatial_kernel : Matern32Kernel | None, m0 : tc.Tensor, P0 : tc.Tensor, energy0 : tc.Tensor = tc.tensor(0.0, requires_grad=True), optim=False):
 
