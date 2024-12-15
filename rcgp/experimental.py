@@ -45,7 +45,7 @@ class SpatioTemporalRCGP(nn.Module):
         #Padding filtering time array and data array
         (self.n_t, self.Ys, self.ts) = self.padding(ts=self._ts, Ys=self._Ys)
 
-        self.__prior_mean_funcs = ["constant", "m_pred"]
+        self.__prior_mean_funcs = ["constant", "local_constant", "m_pred", "spatial"]
 
         self.__fixed_params = {"p" : 1, #temporal Matern kernel (nu_{temporal} = p + 1/2)
                                "robust" : False,
@@ -73,6 +73,8 @@ class SpatioTemporalRCGP(nn.Module):
             self.H0 = eye(1, (1+self.__fixed_params["p"]), k=0).to(tc.float32) #measurement matrix -> temporal only case
             self.H = tc.kron(self.Id, self.H0).to(tc.float32) #measurement matrix -> expanded to spatio-temporal
             self.latent_size = self.n_r * (p + 1)
+            self.K_w = None #For prior mean
+            self._K_w_lengthscale = 4.
         else: #temporal
             self.H = eye(1, (1+self.__fixed_params["p"]), k=0).to(tc.float32) #measurement matrix -> temporal only case
             self.latent_size = p + 1
@@ -136,7 +138,7 @@ class SpatioTemporalRCGP(nn.Module):
         elif isinstance(self.__fixed_params["c"], tc.Tensor):
             return self.__fixed_params["c"]
         else:
-            return self.__fixed_params["c_factor"] * tc.sqrt(self.var_y).clone().detach()
+            return self.__fixed_params["c_factor"] * tc.sqrt(self.var_y)#.clone().detach()
     
     @c.setter
     def c(self, value : float):
@@ -330,6 +332,17 @@ class SpatioTemporalRCGP(nn.Module):
     
     def set_prior_mean(self, func : str):
         self.__fixed_params["prior_mean"] = func
+
+    def compute_K_w(self):
+        k = Matern32Kernel(lengthscale=tc.tensor(self._K_w_lengthscale), magnitude=tc.tensor(1.))
+
+        final_arr = tc.empty((self.n_r, self.n_r))
+
+        for i in range(self.n_r):
+            final_arr[i, :] = k.forward(self.grid[[i]], self.grid)
+            final_arr[i, :] = final_arr[i, :] / final_arr[i, :].sum() #Normalizing, since these are weights
+
+        return final_arr
         
     def prior_mean(self, Y : tc.Tensor, m_prior : tc.Tensor):
 
@@ -337,8 +350,14 @@ class SpatioTemporalRCGP(nn.Module):
             mean = self.Ys.nanmean() * tc.ones_like(Y) #nan mean because we might encounter NaNs in the data (we actually buffer with NaNs)
             return mean
         
+        if self.__fixed_params["prior_mean"] == 'local_constant':
+            return self.K_w @ Y
+        
         elif self.__fixed_params["prior_mean"] == 'm_pred':
             return m_prior
+
+        elif self.__fixed_params["prior_mean"] == "spatial":
+            return self.K_w @ m_prior
         
         else:
             return m_prior
@@ -353,11 +372,17 @@ class SpatioTemporalRCGP(nn.Module):
             if self.__fixed_params["is_c_fixed"]:
                 c = self.c
             else:
-                c = tc.sqrt(tc.diagonal(P_prior) + self.var_y - self.var_y * tc.diagonal(P_prior))#.clone().detach()
+                with tc.no_grad():
+                    #c = 1.
+                    c = tc.sqrt(tc.diagonal(P_prior) + self.var_y - self.var_y * tc.diagonal(P_prior))#.clone().detach()
+                    if self.n_r > 0: 
+                        c = c.reshape(1, -1, 1)
+
 
             weights = IMQ(Y=Y, m=m, beta=self.beta, c=c)
 
             partial_y_weights = partial_y_IMQ(Y=Y, m=m, beta=self.beta, c=c)
+
 
             return weights, partial_y_weights
     
@@ -506,7 +531,7 @@ class SpatioTemporalRCGP(nn.Module):
             
         return ms, Ps, m_preds, P_preds, Ws
     
-    def forward(self, optim : bool = False, weighted_loss=False, predict=False):
+    def forward(self, optim : bool = False, weighted_loss=False, predict=False, m0_data=False):
         
         #Instantiate the temporal kernel
         temporal_kernel = MaternProcess(p=self.__fixed_params["p"],
@@ -519,13 +544,18 @@ class SpatioTemporalRCGP(nn.Module):
             spatial_kernel = Matern32Kernel(lengthscale=self.spatial_lengthscale,
                                        magnitude=self.spatial_magnitude,
                                        )
+            
+            self.K_w = self.compute_K_w()
 
             #Initialize m0 as zeros, since the first step is always a "calibration step" and no data is observed at 0 (because of padding).
             #P0 is the kronecker between spatial kernel and temporal covariance at time 0 (\Sigma_\infty)
+            
             m0=tc.zeros(size=(1, self.latent_size, 1), dtype=tc.float32)
+            if m0_data: 
+                m0[:, ::(1+self.__fixed_params["p"]), :] = self.Ys[[1]]
             P0=tc.kron(spatial_kernel.forward(self.grid, self.grid), temporal_kernel.Sig0).to(tc.float32)
 
-        #If no spatial dimensions
+        #If no spatial 
         else:
             spatial_kernel = None
             m0=tc.zeros(size=(self.latent_size, 1), dtype=tc.float32)
@@ -533,7 +563,10 @@ class SpatioTemporalRCGP(nn.Module):
 
         ms, Ps, m_preds, P_preds, Ws = self.filtsmooth(m0=m0, P0=P0, spatial_kernel=spatial_kernel, temporal_kernel=temporal_kernel, optim=optim, weighted_loss=weighted_loss)
 
-        preds_filt = (self.H @ m_preds)[1:-1].squeeze(-1)
+        preds_filt = (self.H @ m_preds)[1:-1]
+        if self.n_r == 0:
+            preds_filt = preds_filt.squeeze(-1)
+            
         covs_filt = (self.H @ P_preds @ self.H.T)[1:-1]
 
         preds_smooth = (self.H @ ms)[1:-1].squeeze(-1)
