@@ -51,6 +51,7 @@ class SpatioTemporalRCGP(nn.Module):
                                "robust" : False,
                                "prior_mean" : "constant",
                                "beta" : None, #If None, will be sqrt(var_y / 2)
+                               "is_beta_fixed" : False,
                                "c" : 1., #If None and is_c_fixed=True, will be c_factor * sqrt(var_y). 
                                "c_factor" : 1.,
                                "is_c_fixed": True, #When false, c is adaptive and = 2 * predicted std
@@ -99,11 +100,15 @@ class SpatioTemporalRCGP(nn.Module):
 
     @property
     def beta(self):
-        if isinstance(self.__fixed_params["beta"], (float, int)):
-            return tc.tensor(self.__fixed_params["beta"], dtype=tc.float32)
-        
-        elif isinstance(self.__fixed_params["beta"], tc.Tensor):
-            return self.__fixed_params["beta"]
+        if self.__fixed_params["is_beta_fixed"]:
+
+            if isinstance(self.__fixed_params["beta"], (float, int)):
+                return tc.tensor(self.__fixed_params["beta"], dtype=tc.float32)
+            
+            elif isinstance(self.__fixed_params["beta"], tc.Tensor):
+                return self.__fixed_params["beta"]
+            else:
+                raise ValueError(f"{self.__fixed_params["beta"]} is an invalid data type for beta.")
         else:
             return tc.sqrt(self.var_y / 2)#.clone().detach()
     
@@ -119,6 +124,9 @@ class SpatioTemporalRCGP(nn.Module):
             self.__fixed_params["beta"] = None
         else:
             raise ValueError(f"{value} is not a valid value for parameter beta.")
+        
+        self.__fixed_params["is_beta_fixed"] = True
+        return
     
     @property
     def c(self):
@@ -144,10 +152,6 @@ class SpatioTemporalRCGP(nn.Module):
         else:
             raise ValueError(f"{value} is not a valid value for parameter c.")
         
-        self.fixed_c() #Fix c when we do c = value
-        return
-        
-    def fixed_c(self):
         self.__fixed_params["is_c_fixed"] = True
         return
     
@@ -479,9 +483,13 @@ class SpatioTemporalRCGP(nn.Module):
 
         #Stacking into a tensor the weights and energies
         Ws = tc.concatenate(Ws, dim=0) #weights are of the form (1, n_r, 1) for n_r>0 and (1,1) for n_r = 0. So we concatenate on first dim.
-        m_preds = tc.stack(m_preds, dim=0)
-        P_preds = tc.stack(P_preds, dim=0)
-  
+        if self.n_r > 0:
+            m_preds = tc.concatenate(m_preds, dim=0)
+            P_preds = tc.stack(P_preds)
+        else:
+            m_preds = tc.stack(m_preds)
+            P_preds = tc.stack(P_preds)
+
         #energies = tc.stack(energies) #we stack here since energies are squeezed to 0-dim tensors.
 
 
@@ -527,7 +535,6 @@ class SpatioTemporalRCGP(nn.Module):
             P0=temporal_kernel.Sig0.to(tc.float32)
 
         ms, Ps, m_preds, P_preds, Ws = self.filtsmooth(m0=m0, P0=P0, spatial_kernel=spatial_kernel, temporal_kernel=temporal_kernel, optim=optim, weighted_loss=weighted_loss)
-
 
         preds_filt = (self.H @ m_preds)[1:-1].squeeze(-1)
         covs_filt = (self.H @ P_preds @ self.H.T)[1:-1]
