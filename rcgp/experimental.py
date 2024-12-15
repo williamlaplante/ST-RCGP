@@ -136,7 +136,7 @@ class SpatioTemporalRCGP(nn.Module):
         elif isinstance(self.__fixed_params["c"], tc.Tensor):
             return self.__fixed_params["c"]
         else:
-            return self.__fixed_params["c_factor"] * tc.sqrt(self.var_y)#.clone().detach()
+            return self.__fixed_params["c_factor"] * tc.sqrt(self.var_y).clone().detach()
     
     @c.setter
     def c(self, value : float):
@@ -352,11 +352,8 @@ class SpatioTemporalRCGP(nn.Module):
 
             if self.__fixed_params["is_c_fixed"]:
                 c = self.c
-                #c = (Y - m) / tc.sinh(tc.tensor(tc.pi * 0.95 / 2, dtype=tc.float32))
             else:
-                #c = tc.sqrt(tc.max(tc.diagonal(P_prior), self.var_y))
-                c = tc.sqrt(tc.diagonal(P_prior) + self.var_y - self.var_y * tc.diagonal(P_prior))
-                #c = 10 * tc.sqrt(tc.diagonal(P_prior))
+                c = tc.sqrt(tc.diagonal(P_prior) + self.var_y - self.var_y * tc.diagonal(P_prior))#.clone().detach()
 
             weights = IMQ(Y=Y, m=m, beta=self.beta, c=c)
 
