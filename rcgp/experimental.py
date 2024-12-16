@@ -122,8 +122,10 @@ class SpatioTemporalRCGP(nn.Module):
         elif isinstance(value, (float, int)):
             self.__fixed_params["beta"] = tc.tensor(value, dtype=tc.float32)
 
-        elif value is None:
+        elif value is None: #If we set beta = None, we want to revert back to adaptive beta. 
             self.__fixed_params["beta"] = None
+            self.__fixed_params["is_beta_fixed"] = False
+            return
         else:
             raise ValueError(f"{value} is not a valid value for parameter beta.")
         
