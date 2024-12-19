@@ -7,9 +7,7 @@ from .utils import eye
 from .latent_process import MaternProcess
 
 
-
-@tc.jit.script
-def IMQ_and_gradient_jit(Y: tc.Tensor, m: tc.Tensor, beta: tc.Tensor, c: float):
+def IMQ_and_gradient(Y: tc.Tensor, m: tc.Tensor, beta: tc.Tensor, c: float):
     assert Y.shape == m.shape, f"Y has shape {Y.shape} and m has shape {m.shape}. They must be of the same size."
     
     # Precompute shared intermediate terms
@@ -272,7 +270,7 @@ class TemporalRCGP(nn.Module):
     def compute_weights(self, Y : tc.Tensor, m_prior : tc.Tensor, P_prior : tc.Tensor):
 
         if not self.__fixed_params["robust"]:
-            return tc.sqrt(self.var_y / 2).clone().detach(), tc.tensor(0.0)
+            return tc.sqrt(self.var_y / 2).reshape(1,1).clone().detach(), tc.tensor([[0.0]], dtype=tc.float32)
         
         else:
             m = self.prior_mean(Y=Y, m_prior=m_prior)
@@ -284,7 +282,7 @@ class TemporalRCGP(nn.Module):
                     c = tc.sqrt(P_prior + self.var_y - self.var_y * P_prior).squeeze() #.clone().detach()
 
 
-            weights, partial_y_weights = IMQ_and_gradient_jit(Y=Y, m=m, beta=self.beta, c=c)
+            weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c)
 
             return weights, partial_y_weights
     
@@ -339,9 +337,8 @@ class TemporalRCGP(nn.Module):
         ms = tc.empty(size=(self.n_t, self.latent_size, 1), dtype=tc.float32) #n_t time steps where n_t is len(ts) + 2 (padded). latent size depends on number of spatial dimensions and temporal derivatives
         Ps = tc.empty(size=(self.n_t, self.latent_size, self.latent_size), dtype=tc.float32) #same here. 
 
-        
         #Container for the weights. Choosing lists because might have to autodiff through weights and inplace assignment is no good for autodiff.
-        W0 = tc.zeros(size=(1, 1))
+        W0 = tc.tensor(0.0, dtype=tc.float32).reshape(1,1)
         Ws = [W0]
         
         #Where we store the one-step predictions/predictives  p(z_k | y_{1:k-1})
@@ -386,9 +383,8 @@ class TemporalRCGP(nn.Module):
                 Ps[k+1] = P_updated.clone().detach()
                 Ws.append(weights.clone().detach()) 
 
-        #Stacking/concatenating
-        Ws = tc.concatenate(Ws, dim=0) #weights are of the form (1, n_r, 1) for n_r>0 and (1,1) for n_r = 0. So we concatenate on first dim.
-
+        #Stacking
+        Ws = tc.concatenate(Ws) 
         m_preds = tc.stack(m_preds)
         P_preds = tc.stack(P_preds)
 
