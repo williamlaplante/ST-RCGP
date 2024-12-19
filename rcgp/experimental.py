@@ -394,7 +394,7 @@ class SpatioTemporalRCGP(nn.Module):
         P_pred = A @ P @ A.T + Sig  # Predict covariance
         return m_pred.to(tc.float32), P_pred.to(tc.float32)
     
-    def update_step(self, m_pred : tc.Tensor, P_pred : tc.Tensor, Y : tc.Tensor, optim : bool, weighted_loss : bool = False):
+    def update_step(self, m_pred : tc.Tensor, P_pred : tc.Tensor, Y : tc.Tensor):
 
         H_m_pred = self.H @ m_pred #Prediction of mean
         H_P_pred = self.H @ P_pred #Partial prediction of covariance
@@ -407,57 +407,35 @@ class SpatioTemporalRCGP(nn.Module):
         P_updated = tc.linalg.inv( tc.linalg.inv(P_pred) + self.H.T @ R_inv_k @ self.H)
         K_k = P_updated @ self.H.T @ R_inv_k
         m_updated = m_pred + K_k @ (R_k @ v_k - H_m_pred)
-        """
-        if optim:
-            y_hat_e = (Y - H_m_pred).squeeze(0) #shape is (1, n_s, 1). So we squeeze the first dimension, which is time. 
-            S_e = H_P_pred @ self.H.T + self.var_y * tc.eye(Y.shape[1])
 
-            if weighted_loss:
-                #NOTE: .clone().detach() ????
-                #S_e_w = tc.diag(self.beta * weights.flatten().clone().detach()**(-1)) @ S_e # diag(w^{-1}) @ S_k
-                energy = (0.5 * tc.logdet(2 * tc.pi * S_e) + 0.5 * y_hat_e.T @ tc.linalg.inv(S_e) @ y_hat_e).squeeze()
-            else:
-                energy = (0.5 * tc.logdet(2 * tc.pi * S_e) + 0.5 * y_hat_e.T @ tc.linalg.inv(S_e) @ y_hat_e).squeeze()
-            return m_updated, P_updated, energy, weights
-        else:
-            return m_updated, P_updated, weights
-        """
         return m_updated, P_updated, weights
     
-    def filtsmooth(self, temporal_kernel : MaternProcess, spatial_kernel : Matern32Kernel | None, m0 : tc.Tensor, P0 : tc.Tensor, energy0 : tc.Tensor = tc.tensor(0.0, requires_grad=True), optim=False, weighted_loss=False):
+    def filtsmooth(self, temporal_kernel : MaternProcess, spatial_kernel : Matern32Kernel | None, m0 : tc.Tensor, P0 : tc.Tensor):
 
-        #If we perform prediction (not optimization of energy function), generate containers for predictions and further analysis
-        #if not optim:
-            #Where we store the state, covariance estimates m_{k|k}, P_{k|k}
+        #Where we store the state, covariance estimates m_{k|k}, P_{k|k}
         ms = tc.empty(size=(self.n_t, self.latent_size, 1), dtype=tc.float32) #n_t time steps where n_t is len(ts) + 2 (padded). latent size depends on number of spatial dimensions and temporal derivatives
         Ps = tc.empty(size=(self.n_t, self.latent_size, self.latent_size), dtype=tc.float32) #same here. 
 
-            #Where we store the one-step predictions, or predictive  p(z_k | y_{1:k-1})
-            #m_preds = tc.empty_like(ms) 
-            #P_preds = tc.empty_like(Ps)
-
-            #We store the transition matrices A = exp(dt * F) for smoothing
+        #We store the transition matrices A = exp(dt * F) for smoothing
         As = tc.empty_like(Ps)
         
+        #Container for the weights. Choosing lists because might have to autodiff through weights and inplace assignment is no good for autodiff.
         if self.n_r > 0: #if there is a spatial dimension
-            #Container for the weights. Choosing lists because might have to autodiff through weights and inplace assignment is no good for autodiff.
             W0 = tc.zeros(size=(1, self.n_r, 1))
             Ws = [W0]
         else:
             W0 = tc.zeros(size=(1, 1))
             Ws = [W0]
         
-        m_preds = [m0]
-        P_preds = [P0]
-        #energies = [energy0]
+        #Where we store the one-step predictions/predictives  p(z_k | y_{1:k-1})
+        m_preds, P_preds = [m0], [P0]
 
         #Initialize the 0th step. No data observed on 0th step. We always do look-ahead predict and update (i.e. from k, predict k+1 and update with data at k+1)
         m, P = m0, P0 #m, P are the "running" state and covariance matrix. They get overwritten. 
 
-        if not optim:
-            ms[0], Ps[0] = m0.clone().detach(), P0.clone().detach()
-            #m_preds[0], P_preds[0] = m0.clone().detach(), P0.clone().detach()
+        ms[0], Ps[0] = m0.clone().detach(), P0.clone().detach()
 
+        #Filtering
         for k in range(self.n_t - 1):
             #Compute time difference from now to next step
             dt = (self.ts[k+1] - self.ts[k]).item()
@@ -468,45 +446,30 @@ class SpatioTemporalRCGP(nn.Module):
             
             m_preds.append(m_pred)
             P_preds.append(P_pred)
-
-            #if not optim: #If we don't optimize energy, store the prediction estimates and transition matrices
             As[k] = A.clone().detach()
-                #m_preds[k+1] = m_pred.clone().detach()
-                #P_preds[k+1] = P_pred.clone().detach()
 
             #---------------------Update Step------------------------
             if tc.isnan(self.Ys[k+1]).any(): #If data is incomplete we don't perform update step. 
-                #We assign to active m, P the predict step estimate when there is missing data.
                 m = m_pred
                 P = P_pred
 
-                #energy is 0 because there is nothing to compare against for our predict.
-                #energies.append(tc.tensor(0.0, requires_grad=True))
-                Ws.append(W0.clone().detach()) #Weights are also zero because we don't want to include in calculation a value of 0.
-
-                #if not optim: #when we're not optimizing
-                ms[k+1] = m_pred.clone().detach() #We store the predict step mean m_{k+1|k} as the mean estimate m_{k+1|k+1}
-                Ps[k+1] = P_pred.clone().detach() #We store the predict step cov P_{k+1|k} as the cov estimate P_{k+1|k+1}
+                Ws.append(W0.clone().detach()) #Weights are zero because we don't want to include in calculation a value of 0.
+                ms[k+1] = m_pred.clone().detach() #We store the predictive mean m_{k+1|k} as the mean estimate m_{k+1|k+1}
+                Ps[k+1] = P_pred.clone().detach() #We store the predictive step cov P_{k+1|k} as the cov estimate P_{k+1|k+1}
 
             else: #Update with data at k+1 when there is no missing data
-                m_updated, P_updated, weights = self.update_step(m_pred=m_pred, P_pred=P_pred, Y=self.Ys[[k+1]], optim=optim, weighted_loss=True)
-                #if optim:
-                #    m_updated, P_updated, energy, weights = self.update_step(m_pred=m_pred, P_pred=P_pred, Y=self.Ys[[k+1]], optim=optim, weighted_loss=True)
-                #    Ws.append(weights) 
-                #    energies.append(energy)
-                #else:
-                #    m_updated, P_updated, weights = self.update_step(m_pred=m_pred, P_pred=P_pred, Y=self.Ys[[k+1]], optim=optim, weighted_loss=False)
-                ms[k+1] = m_updated.clone().detach()
-                Ps[k+1] = P_updated.clone().detach()
-                Ws.append(weights.clone().detach()) 
-                    #energies.append(energy.clone().detach())
+                m_updated, P_updated, weights = self.update_step(m_pred=m_pred, P_pred=P_pred, Y=self.Ys[[k+1]])
 
-                #Running mean, cov are replaced with updated predict step mean, cov
                 m = m_updated
                 P = P_updated
 
-        #Stacking into a tensor the weights and energies
+                ms[k+1] = m_updated.clone().detach()
+                Ps[k+1] = P_updated.clone().detach()
+                Ws.append(weights.clone().detach()) 
+
+        #Stacking/concatenating
         Ws = tc.concatenate(Ws, dim=0) #weights are of the form (1, n_r, 1) for n_r>0 and (1,1) for n_r = 0. So we concatenate on first dim.
+
         if self.n_r > 0:
             m_preds = tc.concatenate(m_preds, dim=0)
             P_preds = tc.stack(P_preds)
@@ -514,18 +477,8 @@ class SpatioTemporalRCGP(nn.Module):
             m_preds = tc.stack(m_preds)
             P_preds = tc.stack(P_preds)
 
-        #energies = tc.stack(energies) #we stack here since energies are squeezed to 0-dim tensors.
-
-
-        #if optim: #If we're optimizing, skip smoothing and return the energies, weights
-        #    return energies, Ws
-
-        #If we're predicting, we need to condition on all data, i.e. p(z_k | y_{1:n_t})
-        #else:
-
-        #Smoother
+        #RTS Smoothing
         for k in range(self.n_t - 2, -1, -1):  
-            #Using the m_{k+1|k}, P_{k+1|k} predict step estimates from filtering, we can perform RTS smoothing
             C = Ps[k] @ As[k].T @ tc.linalg.inv(P_preds[k+1].clone().detach())
 
             ms[k] = ms[k] + C @ (ms[k+1] - m_preds[k+1].clone().detach())
@@ -533,7 +486,8 @@ class SpatioTemporalRCGP(nn.Module):
             
         return ms, Ps, m_preds, P_preds, Ws
     
-    def forward(self, optim : bool = False, weighted_loss=False, m0_data=False):
+
+    def forward(self, m0_data=False):
         
         #Instantiate the temporal kernel
         temporal_kernel = MaternProcess(p=self.__fixed_params["p"],
@@ -563,7 +517,7 @@ class SpatioTemporalRCGP(nn.Module):
             m0=tc.zeros(size=(self.latent_size, 1), dtype=tc.float32)
             P0=temporal_kernel.Sig0.to(tc.float32)
 
-        ms, Ps, m_preds, P_preds, Ws = self.filtsmooth(m0=m0, P0=P0, spatial_kernel=spatial_kernel, temporal_kernel=temporal_kernel, optim=optim, weighted_loss=weighted_loss)
+        ms, Ps, m_preds, P_preds, Ws = self.filtsmooth(m0=m0, P0=P0, spatial_kernel=spatial_kernel, temporal_kernel=temporal_kernel)
 
         preds_filt = (self.H @ m_preds)[1:-1]
         if self.n_r == 0:
