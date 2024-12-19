@@ -47,8 +47,8 @@ class SpatioTemporalRCGP(nn.Module):
 
         self.__prior_mean_funcs = ["constant", "local_constant", "m_pred", "spatial"]
 
-        self.__fixed_params = {"p" : 1, #temporal Matern kernel (nu_{temporal} = p + 1/2)
-                               "robust" : False,
+        self.__fixed_params = {"p" : p, #temporal Matern kernel (nu_{temporal} = p + 1/2)
+                               "robust" : False, #Not automatically robust!
                                "prior_mean" : "constant",
                                "beta" : None, #If None, will be sqrt(var_y / 2)
                                "is_beta_fixed" : False,
@@ -533,7 +533,7 @@ class SpatioTemporalRCGP(nn.Module):
             
         return ms, Ps, m_preds, P_preds, Ws
     
-    def forward(self, optim : bool = False, weighted_loss=False, predict=False, m0_data=False):
+    def forward(self, optim : bool = False, weighted_loss=False, m0_data=False):
         
         #Instantiate the temporal kernel
         temporal_kernel = MaternProcess(p=self.__fixed_params["p"],
