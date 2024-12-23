@@ -888,7 +888,7 @@ class SpatioTemporalRCGP(nn.Module):
         return ms, Ps, m_preds, P_preds, Ws
     
 
-    def forward(self, smoothing=True):
+    def forward(self, smoothing=True, m0_data=False):
         
         #Instantiate the temporal kernel
         temporal_kernel = MaternProcess(p=self.__fixed_params["p"],
@@ -907,6 +907,9 @@ class SpatioTemporalRCGP(nn.Module):
             #P0 is the kronecker between spatial kernel and temporal covariance at time 0 (\Sigma_\infty)
             
         m0=tc.zeros(size=(self.latent_size, 1), dtype=tc.float32)
+        
+        if m0_data:
+            m0[::(1 + self.__fixed_params["p"])] = self.Ys[1]
 
         P0=tc.kron(spatial_kernel.forward(self.grid, self.grid), temporal_kernel.Sig0).to(tc.float32)
 
