@@ -580,8 +580,12 @@ class SpatioTemporalRCGP(nn.Module):
         self.__fixed_params["is_c_fixed"] = True
         return
     
-    def adaptive_c(self):
+    def adaptive_c(self, c_factor : float = 1.):
         self.__fixed_params["is_c_fixed"] = False
+        if isinstance(c_factor, tc.Tensor):
+            self.__fixed_params["c_factor"] = c_factor.item()
+        elif isinstance(c_factor, (float, int)):
+            self.__fixed_params["c_factor"] = float(c_factor)
         return
 
     @property
@@ -778,9 +782,7 @@ class SpatioTemporalRCGP(nn.Module):
                 c = self.c
             else:
                 with tc.no_grad():
-                    #c = 1.
-                    c = tc.sqrt(tc.diagonal(P_prior) + self.var_y - self.var_y * tc.diagonal(P_prior))#.clone().detach() 
-                    c = c.reshape(-1, 1)
+                    c = tc.sqrt(self.__fixed_params["c_factor"] * (tc.diagonal(P_prior) + self.var_y) ).reshape(-1,1)
 
             weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c)
 
