@@ -1,2 +1,2 @@
 # ST-RCGP
-Spatio-Temporal Robust and Conjugate Gaussian Processes. 
+Robust and Conjugate Spatio-Temporal Gaussian Processes. 
