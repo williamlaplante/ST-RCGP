@@ -61,6 +61,7 @@ class TemporalRCGP(nn.Module):
                  raw_var_y_init : float = 1.0,
                  raw_temporal_lengthscale_init : float = 1.0,
                  raw_temporal_magnitude_init : float = 1.0,
+                 IMQ_exponent : float = 1/2,
                  ):
        
         super().__init__()
@@ -90,6 +91,7 @@ class TemporalRCGP(nn.Module):
         self._raw_temporal_lengthscale = nn.Parameter(tc.tensor(raw_temporal_lengthscale_init, dtype=tc.float32))
         self._raw_temporal_magnitude = nn.Parameter(tc.tensor(raw_temporal_magnitude_init, dtype=tc.float32))
 
+        self.IMQ_exponent = float(IMQ_exponent)
 
         self.H = eye(1, (1+self.__fixed_params["p"]), k=0).to(tc.float32) #measurement matrix -> temporal only case
         self.latent_size = p + 1
@@ -308,7 +310,7 @@ class TemporalRCGP(nn.Module):
             else:
                 c = tc.sqrt(self.__fixed_params["c_factor"] * (P_prior + self.var_y) ).squeeze()
             
-            weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c)
+            weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c, alpha=self.IMQ_exponent)
 
             return weights, partial_y_weights
     
@@ -471,6 +473,7 @@ class SpatioTemporalRCGP(nn.Module):
                  raw_temporal_magnitude_init : float = 1.0,
                  raw_spatial_lengthscale_init : float = 1.0,
                  raw_spatial_magnitude_init : float = 1.0,
+                 IMQ_exponent : float = 1/2,
                  ):
         """
         Initialization phase prior to hyperparameter optimization or inference/prediction. 
@@ -511,7 +514,7 @@ class SpatioTemporalRCGP(nn.Module):
         self._raw_spatial_lengthscale = nn.Parameter(tc.tensor(raw_spatial_lengthscale_init, dtype=tc.float32))
         self._raw_spatial_magnitude = nn.Parameter(tc.tensor(raw_spatial_magnitude_init, dtype=tc.float32))
 
-
+        self.IMQ_exponent = float(IMQ_exponent)
         
         self.Id = eye(self.n_r).to(tc.float32)
         self.H0 = eye(1, (1+self.__fixed_params["p"]), k=0).to(tc.float32) #measurement matrix -> temporal only case
@@ -804,7 +807,7 @@ class SpatioTemporalRCGP(nn.Module):
                 with tc.no_grad():
                     c = tc.sqrt(self.__fixed_params["c_factor"] * (tc.diagonal(P_prior) + self.var_y) ).reshape(-1,1)
 
-            weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c)
+            weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c, alpha=self.IMQ_exponent)
 
             return weights, partial_y_weights
     
@@ -966,6 +969,7 @@ class SparseSpatioTemporalRCGP(nn.Module):
                  raw_temporal_magnitude_init : float = 1.0,
                  raw_spatial_lengthscale_init : float = 1.0,
                  raw_spatial_magnitude_init : float = 1.0,
+                 IMQ_exponent : float = 1/2,
                  ):
         """
         Initialization phase prior to hyperparameter optimization or inference/prediction. 
@@ -1011,6 +1015,7 @@ class SparseSpatioTemporalRCGP(nn.Module):
 
         self.sparse_grid = nn.Parameter(tc.nn.init.uniform_(tc.empty(size=(self.__n_u, self.d - 1), dtype=tc.float32)))
 
+        self.IMQ_exponent = float(IMQ_exponent)
         
         self.Id_z = eye(self.n_r).to(tc.float32)
         self.Id_sparse = eye(self.__n_u).to(tc.float32)
@@ -1316,7 +1321,7 @@ class SparseSpatioTemporalRCGP(nn.Module):
                     c = tc.sqrt(tc.diagonal(P_prior) + self.var_y - self.var_y * tc.diagonal(P_prior))#.clone().detach() 
                     c = c.reshape(-1, 1)
 
-            weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c)
+            weights, partial_y_weights = IMQ_and_gradient(Y=Y, m=m, beta=self.beta, c=c, alpha=self.IMQ_exponent)
 
             return weights, partial_y_weights
     
