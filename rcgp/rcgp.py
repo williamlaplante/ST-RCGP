@@ -7,8 +7,8 @@ from .utils import eye
 from .latent_process import MaternProcess
 from.kernels import Matern32Kernel
 
-
-def IMQ_and_gradient(Y: tc.Tensor, m: tc.Tensor, beta: tc.Tensor, c: float):
+"""
+def IMQ_and_gradient(Y: tc.Tensor, m: tc.Tensor, beta: tc.Tensor, c: float, alpha : float):
     assert Y.shape == m.shape, f"Y has shape {Y.shape} and m has shape {m.shape}. They must be of the same size."
     
     # Precompute shared intermediate terms
@@ -25,8 +25,28 @@ def IMQ_and_gradient(Y: tc.Tensor, m: tc.Tensor, beta: tc.Tensor, c: float):
     # Gradient-like term
     gradient_term = -beta * diff * rsqrt_term.pow(3)  # -beta * diff / (1 + diff^2)^(3/2)
     
-    return IMQ, gradient_term
+    return IMQ, gradient_term"""
 
+
+def IMQ_and_gradient(Y: tc.Tensor, m: tc.Tensor, beta: tc.Tensor, c: float, alpha : float = 1/2):
+    assert Y.shape == m.shape, f"Y has shape {Y.shape} and m has shape {m.shape}. They must be of the same size."
+    
+    # Precompute shared intermediate terms
+    diff = (Y - m) / c                      # Element-wise division
+    diff_squared = diff.pow(2)              # Square of the difference
+    one_plus_diff_squared = 1 + diff_squared  # (1 + ((Y - m) / c)^2)
+    
+    # Compute reciprocal square root for the IMQ term
+    ralpha_term = one_plus_diff_squared.pow(-alpha)  # (1 + diff^2)^(-alpha)
+    
+    # IMQ term
+    IMQ = beta * ralpha_term
+    
+    # Gradient-like term
+    gradient_term = -beta * 2 * alpha * diff * (1/c) * one_plus_diff_squared.pow(-alpha -1) #-beta * alpha * (y-m) / c * (1/c) * (1 + (y-m)^2/c^2)^{-alpha - 1}
+    
+    
+    return IMQ, gradient_term
 
 
 
